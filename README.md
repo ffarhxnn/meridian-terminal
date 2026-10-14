@@ -1,4 +1,4 @@
-# Meridian personal market terminal · v0.5
+# Meridian personal market terminal · v0.6
 
 Local React/TypeScript UI, FastAPI and SQLite. All displayed market observations and history now come from public providers. Missing data stays unavailable; there is no synthetic fallback. The original project `sources/` directory is untouched.
 
@@ -121,3 +121,23 @@ Stooq keyless CSV returned 404 and its page required browser verification; no by
 No Gemini key is necessary for quotes or RSS. An optional Gemini synthesis adapter is now available; no live Gemini requests were made without credentials. The deterministic cited digest works without any AI account. Google documents free-tier availability and that free-tier prompts may be used to improve its products; account terms/quotas apply. No billing settings are changed. See [Gemini generation API](https://ai.google.dev/api/generate-content) and [pricing/data-use terms](https://ai.google.dev/gemini-api/docs/pricing).
 
 The current source tree has 30 automated tests covering data parsing/provenance, portfolio cost basis, date alignment, calculator identities/finite differences, alerts, notebooks, global catalog validation and model citation contracts. Gemini is tested with a mock transport; live credentialed AI remains unverified. See `ROADMAP.md` for the capability expansion map and external dependencies.
+
+
+## Dense workstation stage
+
+The main workspace now uses a black/amber terminal theme, seven resizable widgets, per-workspace saved positions, close/restore, lock/reset and maximize controls. Chart choices: genuine Candles/OHLC when supplied, Line/Area otherwise; volume, SMA20/50, EMA20, Bollinger, Wilder RSI and MACD. No artificial candles or volumes. Mouse crosshair, pan/zoom and FIT are supported. Preferences persist locally.
+
+Use `AAPL US EQUITY GP`, `BTC NEWS`, `DES`, `FA` after a covered symbol; `TOP`, `ECO`, `WEI`, `FX`, `CRYPTO`, `PORT`, `SCR`, `MOV`, `HELP`. Native suggestions and the last 30 commands are stored in this browser; Up/Down recalls history, Ctrl+K focuses input, Escape clears it. WEI covers the current universe only; FA exposes available metadata and explicitly identifies missing statements. Unknown instruments use the existing global lookup.
+
+Checks: `pnpm test` (Node 22.18+ or 24 for built-in TypeScript stripping), `pnpm lint` (new module baseline), `pnpm build`, `python -m pytest -q` (application tests only). Latest stage: 6 frontend and 32 backend tests passed. See REFERENCE_AUDIT.md for inspected revisions, browser checks and known gaps; THIRD_PARTY_NOTICES.md for attribution.
+
+
+## SEC annual financial facts and provider health
+
+`AAPL FA` or `AAPL US EQUITY FA` opens selected annual SEC US-GAAP facts. Also supported: MSFT, NVDA, TSLA (TSLA must be added through lookup when absent). The Statements sidebar opens the selected instrument. Every figure includes its unit, start/end dates, filing date, tag and direct filing index link. Financial research questions can retrieve up to six of these facts as separately cited evidence. SEC data requires no API key: https://www.sec.gov/search-filings/edgar-application-programming-interfaces . Issuer identity is checked against SEC submissions. Standard tags only; missing values are not estimated. Later filings can restate prior annual values. This is not a complete income/balance/cash-flow statement or TTM dataset.
+
+Requests to SEC hosts are spaced to at most five starts per second per process. Facts are cached for six hours. Public-feed requests have at most four concurrent requests per host, exponential cooldown after failure, 15-minute cooldown after 401/403 and bounded Retry-After handling for 429/503. No immediate retry or access bypass. Coverage shows host, HTTP status, latency, failures and cooldown; it never returns URLs, parameters or keys. Health is process-local and resets at server restart; SQLite observations persist. Chart observation arrows are focusable buttons: Enter inspects the previous/next reported bar in the legend.
+
+Latest validation: 39 backend tests and 6 frontend tests pass; new-module lint, TypeScript and production build pass. Live SEC checks succeeded for all four mapped issuers (Nvidia has 9/10 supported standard metrics). One test-client dependency deprecation warning remains. Backend tests use isolated SQLite and mocked upstreams; live probes are separate from automated assertions.
+
+Provider cooldown recovery test added: latest backend count is 40. Browser also confirmed horizontal widget reordering and reset, plus financial evidence citations in the copilot.

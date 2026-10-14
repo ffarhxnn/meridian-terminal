@@ -151,3 +151,30 @@ def test_calculator_api_validates_inputs_and_labels_scenarios(client):
     invalid=client.post('/api/calculators/options',json={'spot':100,'strike':100,'days':0,'volatility_pct':20,'rate_pct':5})
     assert invalid.status_code==422
     assert client.post('/api/calculators/bonds',json={'coupon_pct':4,'yield_pct':4,'years':1.3,'frequency':2}).status_code==400
+
+
+def test_sec_statement_route_uses_cache_and_labels_unsupported(client,monkeypatch):
+    from backend import statements
+    calls=[]
+    async def provider(symbol):
+        calls.append(symbol)
+        return {'symbol':symbol,'source':'Mock SEC','mode':'provider','as_of':'2025-12-31','metrics':[]}
+    monkeypatch.setattr(statements,'provider',provider)
+    assert client.get('/api/statements/AAPL').json()['source']=='Mock SEC'
+    assert client.get('/api/statements/AAPL').json()['mode']=='provider'
+    assert calls==['AAPL']
+    assert client.get('/api/statements/SPY').json()['mode']=='unavailable'
+    assert client.get('/api/statements/UNKNOWN').status_code==404
+
+
+def test_research_financial_question_includes_exact_sec_period_and_citation(client,monkeypatch):
+    from backend import statements
+    async def provider(symbol):
+        return {'mode':'provider','source':'SEC','as_of':'2025-12-31','metrics':[{'label':'Revenue','value':100,'unit':'USD','start':'2025-01-01','end':'2025-12-31','filed':'2026-02-01','tag':'us-gaap:Revenues','source_url':'https://www.sec.gov/Archives/test-index.html'}]}
+    monkeypatch.setattr(statements,'provider',provider)
+    data=client.post('/api/research',json={'question':'Explain reported revenue','symbol':'AAPL'}).json()
+    source=next(s for s in data['sources'] if s['publisher']=='SEC EDGAR')
+    assert '2025-01-01' in source['summary'] and '2025-12-31' in source['summary']
+    assert 'not a current quote' in source['summary']
+    assert source['url']=='https://www.sec.gov/Archives/test-index.html'
+    assert '['+str(source['id'])+']' in data['answer']

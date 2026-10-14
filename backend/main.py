@@ -91,10 +91,18 @@ async def research(body: Question):
  sources=[]
  if q['price'] is not None:
   sources.append({'id':1,'title':q['symbol']+' — '+q['source'],'url':q['source_url'],'published_at':q['as_of'],'summary':f"Observed price {q['price']} {q['unit']}; mode {q['mode']}; {q['freshness']}. Change period: {q['change_period']}.",'publisher':q['source'],'evidence_scope':'Retrieved market observation'})
+ from backend import statements as sec_statements
+ if body.symbol in sec_statements.CIKS and any(term in body.question.lower() for term in ('revenue','earnings','financial','balance sheet','cash flow','fundamental','income','assets','profit','statement')):
+  financials=await cache.fetch('public:v1:statements:'+body.symbol,lambda:sec_statements.provider(body.symbol),21600,{'metrics':[],'source':'SEC EDGAR','as_of':None})
+  for metric in financials.get('metrics',[])[:6]:
+   if metric.get('value') is None:continue
+   sources.append({'id':len(sources)+1,'title':body.symbol+' — SEC annual '+metric['label'],'url':metric['source_url'],
+    'published_at':metric.get('filed'),'publisher':'SEC EDGAR','mode':financials['mode'],'evidence_scope':'Selected reported annual US-GAAP fact',
+    'summary':f"{metric['label']}: {metric['value']} {metric['unit']}; period {metric.get('start') or 'balance at'} to {metric['end']}; filed {metric.get('filed')}; {metric['tag']}; source state {financials['mode']}. Annual reported fact, not a current quote or TTM estimate."})
  from backend.analytics import rank_news
  for article in rank_news(wire['items'],body.symbol,body.question,q['name'])[:5]: sources.append({**article,'id':len(sources)+1})
  context=json.dumps(sources,ensure_ascii=False)
- answer=('Available evidence for '+body.symbol+':\n'+'\n'.join(f"[{s['id']}] {s['title']} ({s.get('published_at') or 'publication time unavailable'}). {s['summary']}" for s in sources)+'\nThese are retrieved observations and publisher feed summaries, not full articles. The market/policy news feed is not a company-specific causal analysis and does not establish causes of price moves.') if sources else 'No retrievable evidence is currently available. No research conclusion can be supported.'
+ answer=('Available evidence for '+body.symbol+':\n'+'\n'.join(f"[{s['id']}] {s['title']} ({s.get('published_at') or 'publication time unavailable'}). {s['summary']}" for s in sources)+'\nThese are retrieved observations and publisher feed summaries and any identified SEC annual facts, not full articles. The market/policy news feed is not a company-specific causal analysis and does not establish causes of price moves.') if sources else 'No retrievable evidence is currently available. No research conclusion can be supported.'
  engine='Retrieved evidence digest (no model configured)'
  try:
   from backend.research import synthesize
@@ -147,3 +155,6 @@ register_calendar(app,cache)
 
 from backend.status import register as register_status
 register_status(app,db,all_assets)
+
+from backend.statements import register as register_statements
+register_statements(app,cache,asset)

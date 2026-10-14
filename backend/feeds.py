@@ -95,11 +95,8 @@ async def equity_series(symbol):
 
 def now(): return datetime.now(timezone.utc).isoformat()
 
-async def get(url, params=None):
-    async with httpx.AsyncClient(timeout=18, follow_redirects=True, headers={'User-Agent':'MeridianPersonalTerminal/0.3 (public data research)'}) as client:
-        r = await client.get(url, params=params)
-        r.raise_for_status()
-        return r
+from backend.transport import get
+
 
 def number(value):
     n = float(value)
