@@ -141,3 +141,26 @@ Requests to SEC hosts are spaced to at most five starts per second per process. 
 Latest validation: 39 backend tests and 6 frontend tests pass; new-module lint, TypeScript and production build pass. Live SEC checks succeeded for all four mapped issuers (Nvidia has 9/10 supported standard metrics). One test-client dependency deprecation warning remains. Backend tests use isolated SQLite and mocked upstreams; live probes are separate from automated assertions.
 
 Provider cooldown recovery test added: latest backend count is 40. Browser also confirmed horizontal widget reordering and reset, plus financial evidence citations in the copilot.
+
+
+## Broader FX reference coverage
+
+Added AUD/USD, NZD/USD, USD/JPY, USD/CHF, USD/CAD, EUR/GBP and EUR/JPY to the two existing pairs. Frankfurter v1/ECB supplies daily reference observations and history without a key; rates are not intraday executable quotes. Each pair returns its actual quote currency. Non-USD rows explicitly display the currency. Non-USD quoted instruments are blocked from the USD paper ledger in both UI and backend until conversion accounting is implemented. FX snapshots cache for six hours. The live check returned provider observations for all nine pairs. Automated tests now total 42 backend + 6 frontend; currency parsing and ledger exclusion have regression tests.
+
+History and reference metadata now load independently; one failed request cannot suppress the other. Source labels clear on instrument changes so the previous issuer's label is not shown while new data loads.
+
+
+## World indices
+
+`WEI` selects the Indices group and S&P 500 index chart. Covered levels: S&P 500 (^GSPC), Nasdaq Composite (^IXIC), Dow (^DJI), FTSE 100 (^FTSE), DAX (^GDAXI), Nikkei 225 (^N225), Hang Seng (^HSI), EURO STOXX 50 (^STOXX50E). Each has a checked INDEX provider type, source history and point units. They always use the best-effort Yahoo website adapter, even when an optional U.S. equity API key is configured. Index methodologies, calendars and session timestamps differ; these are not a standardized total-return dataset. Index levels cannot enter the USD paper portfolio. Indices can also be screened and compared descriptively.
+
+Live endpoint probes returned INDEX metadata and observations for all eight symbols. Automated checks now pass 44 backend tests plus 6 frontend tests, with dedicated foreign-index currency/type and optional-provider routing regressions.
+
+
+## Background refresh
+
+Market and publisher-feed reads now use stale-while-revalidate. An expired cached observation returns immediately with `mode=stale`, `refreshing=true`, its original observation date and an explicit warning, while a single task per cache key refreshes it. Concurrent readers do not wait behind that task. Successful retrieval replaces the snapshot; failure keeps the old snapshot stale and backs off for 60 seconds plus provider-level cooldown. The next automatic/manual refresh reads the updated data. Empty/unavailable data is not presented as a stale price. Paper orders and research quote retrieval retain the blocking path and require provider state for a paper fill. Historical chart requests currently retain blocking refresh with stale-on-error; background refresh is enabled for market/news reads only.
+
+Latest test checkpoint: 46 backend tests + 6 frontend tests, new-module lint and production build passed. Cache tests verify concurrent readers, one refresh per key, timestamp preservation, recovery and failure backoff.
+
+When the server reports an active background refresh, the UI rechecks after two seconds, up to three times, then returns to its normal two-minute polling interval. This reads the deduplicated cache; it does not issue an immediate upstream retry.

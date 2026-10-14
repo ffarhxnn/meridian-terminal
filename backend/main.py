@@ -17,7 +17,13 @@ ASSETS = [
  ('NVDA','NVIDIA Corp.','Equities'),('BTC','Bitcoin','Crypto'),
  ('ETH','Ethereum','Crypto'),('EUR/USD','Euro / US Dollar','FX'),
  ('GBP/USD','British Pound / US Dollar','FX'),('DGS10','US 10Y Treasury par yield (Treasury)','Macro'),
- ('CPIAUCSL','US consumer price index','Macro'),('GLD','Gold ETF','Equities')]
+ ('CPIAUCSL','US consumer price index','Macro'),('GLD','Gold ETF','Equities'),
+ ('AUD/USD','Australian Dollar / US Dollar','FX'),('NZD/USD','New Zealand Dollar / US Dollar','FX'),
+ ('USD/JPY','US Dollar / Japanese Yen','FX'),('USD/CHF','US Dollar / Swiss Franc','FX'),
+ ('USD/CAD','US Dollar / Canadian Dollar','FX'),('EUR/GBP','Euro / British Pound','FX'),('EUR/JPY','Euro / Japanese Yen','FX'),
+ ('^GSPC','S&P 500 Index','Indices'),('^IXIC','Nasdaq Composite','Indices'),('^DJI','Dow Jones Industrial Average','Indices'),
+ ('^FTSE','FTSE 100','Indices'),('^GDAXI','DAX','Indices'),('^N225','Nikkei 225','Indices'),
+ ('^HSI','Hang Seng Index','Indices'),('^STOXX50E','EURO STOXX 50','Indices')]
 
 def db():
  c=sqlite3.connect(os.getenv('DB_PATH','terminal.sqlite3'), timeout=15)
@@ -38,11 +44,11 @@ import asyncio
 cache=Cache(db)
 
 def empty_quote(a):
- return dict(symbol=a[0],name=a[1],asset_class=a[2],price=None,change_pct=None,source='Not available',source_url=None,as_of=None,retrieved_at=None,unit='percent' if a[0]=='DGS10' else 'index' if a[2]=='Macro' else 'USD',freshness='Unavailable',change_period='unavailable')
+ return dict(symbol=a[0],name=a[1],asset_class=a[2],price=None,change_pct=None,source='Not available',source_url=None,as_of=None,retrieved_at=None,unit='percent' if a[0]=='DGS10' else 'index' if a[2]=='Macro' else a[0].split('/')[1] if a[2]=='FX' else 'points' if a[2]=='Indices' else 'USD',freshness='Unavailable',change_period='unavailable')
 
-async def quote(symbol):
+async def quote(symbol,background=False):
  a=asset(symbol)
- return await cache.fetch('public:v3:quote:'+symbol,lambda:quote_provider(a),120 if a[2]=='Crypto' else 21600 if a[2]=='Macro' else 900,empty_quote(a))
+ return await cache.fetch('public:v3:quote:'+symbol,lambda:quote_provider(a),120 if a[2]=='Crypto' else 21600 if a[2] in ('Macro','FX') else 900,empty_quote(a),background=background)
 
 @app.get('/api/health')
 def health(): return {'ok':True,'mode':'public','refresh_seconds':120}
@@ -52,7 +58,7 @@ async def markets():
  # Bound concurrency while provider/cache layers deduplicate resources.
  semaphore=asyncio.Semaphore(3)
  async def read(a):
-  async with semaphore:return await quote(a[0])
+  async with semaphore:return await quote(a[0],background=True)
  return await asyncio.gather(*(read(a) for a in all_assets()))
 
 @app.get('/api/history/{symbol:path}')
@@ -67,7 +73,7 @@ async def fundamentals(symbol: str):
 
 @app.get('/api/news')
 async def news(symbol: str | None = None):
- results=await asyncio.gather(*[cache.fetch('public:v3:news:'+publisher,lambda p=publisher,u=url,d=domain:feed_provider(p,u,d),300,{'items':[],'source':publisher,'as_of':None}) for publisher,url,domain in FEEDS])
+ results=await asyncio.gather(*[cache.fetch('public:v3:news:'+publisher,lambda p=publisher,u=url,d=domain:feed_provider(p,u,d),300,{'items':[],'source':publisher,'as_of':None},background=True) for publisher,url,domain in FEEDS])
  items=[]; seen=set()
  for result in results:
   for entry in result['items'][:10]:
@@ -79,7 +85,7 @@ async def news(symbol: str | None = None):
   asset(symbol)
   from backend.analytics import rank_news
   items=rank_news(items,symbol,name=asset(symbol)[1])
- return {'mode':'provider' if all(r['mode']=='provider' for r in results) else 'partial','items':items,'feeds':[{'publisher':r['source'],'mode':r['mode'],'warning':r.get('warning')} for r in results],'as_of':now(),'note':'Publisher RSS headlines and summaries; full articles not fetched. Refreshed every five minutes.'}
+ return {'mode':'provider' if all(r['mode']=='provider' for r in results) else 'partial','refreshing':any(r.get('refreshing',False) for r in results),'items':items,'feeds':[{'publisher':r['source'],'mode':r['mode'],'warning':r.get('warning'),'refreshing':r.get('refreshing',False)} for r in results],'as_of':now(),'note':'Publisher RSS headlines and summaries; full articles not fetched. Refreshed every five minutes.'}
 
 class Question(BaseModel):
  question: str=Field(min_length=1,max_length=2000)
@@ -130,6 +136,7 @@ async def order(body: Order):
  if a[2]=='Macro': raise HTTPException(400,'Economic series cannot be traded')
  if body.side not in ['buy','sell']: raise HTTPException(400,'Side must be buy or sell')
  q=await quote(body.symbol)
+ if q.get('unit')!='USD':raise HTTPException(400,'USD paper account supports USD-quoted instruments only; cross-currency accounting is not implemented')
  if q['price'] is None or q['mode']!='provider': raise HTTPException(409,'A currently available provider observation is required for a paper fill')
  price=q['price']; qty=body.quantity*(1 if body.side=='buy' else -1)
  with db() as c:

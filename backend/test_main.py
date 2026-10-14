@@ -23,7 +23,7 @@ def client(tmp_path, monkeypatch):
 
 def test_public_quotes_never_fabricate(client):
     quotes=client.get('/api/markets').json()
-    assert len(quotes)==12
+    assert len(quotes)==len(main.ASSETS)
     missing=next(q for q in quotes if q['symbol']=='SPY')
     assert missing['price'] is None and missing['mode']=='unavailable'
     assert all(q['mode']!='demo' for q in quotes)
@@ -178,3 +178,48 @@ def test_research_financial_question_includes_exact_sec_period_and_citation(clie
     assert 'not a current quote' in source['summary']
     assert source['url']=='https://www.sec.gov/Archives/test-index.html'
     assert '['+str(source['id'])+']' in data['answer']
+
+
+def test_fx_quote_and_history_use_target_currency(monkeypatch):
+    calls=[]
+    async def get(url,params):
+        calls.append(params)
+        return httpx.Response(200,json={'rates':{'2026-10-12':{'JPY':150},'2026-10-13':{'JPY':153}}},request=httpx.Request('GET',url))
+    monkeypatch.setattr(feeds,'get',get)
+    q=asyncio.run(feeds.quote_provider(('USD/JPY','Dollar / Yen','FX')))
+    h=asyncio.run(feeds.history_provider(('USD/JPY','Dollar / Yen','FX')))
+    assert q['unit']=='JPY' and q['price']==153 and q['change_pct']==pytest.approx(2)
+    assert h['points'][-1]['value']==153
+    assert all(p['base']=='USD' and p['symbols']=='JPY' for p in calls)
+
+def test_non_usd_quote_cannot_enter_usd_paper_account(client,monkeypatch):
+    async def quote(symbol):
+        return {'price':150,'unit':'JPY','mode':'provider'}
+    monkeypatch.setattr(main,'quote',quote)
+    response=client.post('/api/orders',json={'symbol':'USD/JPY','side':'buy','quantity':1})
+    assert response.status_code==400
+    assert 'USD-quoted' in response.json()['detail']
+    assert client.get('/api/portfolio').json()['trades']==[]
+
+
+def test_index_parser_accepts_local_reference_currency_but_checks_type():
+    data={'chart':{'result':[{'meta':{'symbol':'^N225','currency':'JPY','instrumentType':'INDEX','exchangeTimezoneName':'Asia/Tokyo'},'timestamp':[1791936000],'indicators':{'quote':[{'close':[42000]}]}}]}}
+    meta,points=feeds.parse_equity_chart(data,'^N225',index=True)
+    assert meta['currency']=='JPY' and points[0]['value']==42000
+    with pytest.raises(ValueError,match='currency'):
+        feeds.parse_equity_chart(data,'^N225')
+    data['chart']['result'][0]['meta']['instrumentType']='EQUITY'
+    with pytest.raises(ValueError,match='index'):
+        feeds.parse_equity_chart(data,'^N225',index=True)
+
+def test_index_quote_is_points_and_ignores_optional_equity_override(monkeypatch):
+    monkeypatch.setenv('ALPHA_VANTAGE_API_KEY','test-only')
+    calls=[]
+    async def series(symbol,index=False):
+        calls.append(index)
+        return {'regularMarketPrice':42000,'regularMarketTime':1792022400,'exchangeTimezoneName':'Asia/Tokyo'},[{'date':'2026-10-12','value':40000}],'https://finance.yahoo.com/quote/%5EN225/history/'
+    monkeypatch.setattr(feeds,'equity_series',series)
+    q=asyncio.run(feeds.quote_provider(('^N225','Nikkei 225','Indices')))
+    assert q['unit']=='points' and q['price']==42000
+    assert q['change_pct']==pytest.approx(5)
+    assert calls==[True]

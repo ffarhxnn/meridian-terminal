@@ -64,11 +64,14 @@ async def _macro_series(symbol):
 async def macro_series(symbol):
     return await memoized('macro:'+symbol,lambda:_macro_series(symbol),21600)
 
-def parse_equity_chart(data,symbol):
+def parse_equity_chart(data,symbol,index=False):
     chart=data['chart']
     if chart.get('error'): raise ValueError('Equity chart provider error')
     result=chart['result'][0]; meta=result['meta']
-    if meta['symbol'].upper()!=symbol or meta.get('currency')!='USD': raise ValueError('Unexpected equity symbol/currency')
+    if meta['symbol'].upper()!=symbol:raise ValueError('Unexpected provider symbol')
+    if index:
+        if meta.get('instrumentType')!='INDEX':raise ValueError('Expected an index observation')
+    elif meta.get('currency')!='USD':raise ValueError('Unexpected equity currency')
     zone=ZoneInfo(meta.get('exchangeTimezoneName','America/New_York'))
     points=[]
     bars=result['indicators']['quote'][0]
@@ -82,16 +85,16 @@ def parse_equity_chart(data,symbol):
             points.append(point)
     return meta, sorted(points,key=lambda x:x['date'])
 
-async def _equity_series(symbol):
+async def _equity_series(symbol,index=False):
     # Public website endpoint, not a supported/sla-backed API. No cookies, tokens,
     # browser impersonation, authentication bypass, or retries after denial.
     url='https://query1.finance.yahoo.com/v8/finance/chart/'+symbol
     data=(await get(url,{'range':'1y','interval':'1d'})).json()
-    meta,points=parse_equity_chart(data,symbol)
+    meta,points=parse_equity_chart(data,symbol,index=index)
     return meta,points,'https://finance.yahoo.com/quote/'+symbol+'/history/'
 
-async def equity_series(symbol):
-    return await memoized('equity:'+symbol,lambda:_equity_series(symbol),900)
+async def equity_series(symbol,index=False):
+    return await memoized(('index:' if index else 'equity:')+symbol,lambda:_equity_series(symbol,index=index),900)
 
 def now(): return datetime.now(timezone.utc).isoformat()
 
@@ -117,7 +120,7 @@ async def av(function, symbol):
 
 async def quote_provider(a):
     symbol,name,kind,*_ = a
-    q = dict(symbol=symbol,name=name,asset_class=kind,price=None,change_pct=None,mode='provider',retrieved_at=now(),unit='percent' if symbol=='DGS10' else 'index' if kind=='Macro' else 'USD')
+    q = dict(symbol=symbol,name=name,asset_class=kind,price=None,change_pct=None,mode='provider',retrieved_at=now(),unit='percent' if symbol=='DGS10' else 'index' if kind=='Macro' else symbol.split('/')[1] if kind=='FX' else 'points' if kind=='Indices' else 'USD')
     if kind=='Crypto':
         base='https://api.exchange.coinbase.com/products/'+symbol+'-USD'
         ticker, stats = await asyncio.gather(get(base+'/ticker'),get(base+'/stats'))
@@ -126,20 +129,21 @@ async def quote_provider(a):
     elif kind=='FX':
         start=(datetime.now(timezone.utc)-timedelta(days=10)).date().isoformat()
         url='https://api.frankfurter.dev/v1/'+start+'..'
-        data=(await get(url,{'base':symbol[:3],'symbols':'USD'})).json()
+        base,target=symbol.split('/')
+        data=(await get(url,{'base':base,'symbols':target})).json()
         dates=sorted(data['rates']); last,prev=dates[-1],dates[-2]
-        p=number(data['rates'][last]['USD']); old=number(data['rates'][prev]['USD'])
+        p=number(data['rates'][last][target]); old=number(data['rates'][prev][target])
         q.update(price=p,change_pct=(p/old-1)*100,as_of=last,source='Frankfurter / ECB',source_url='https://frankfurter.dev/v1/',freshness='Daily reference rate; not a tradable quote',change_period='previous published day')
     elif kind=='Macro':
         series=await macro_series(symbol)
         last=series['points'][-1]
         q.update(price=last['value'],as_of=last['date'],source=series['source'],source_url=series['source_url'],freshness=series['definition'],change_period='not comparable')
     else:
-        if os.getenv('ALPHA_VANTAGE_API_KEY'):
+        if os.getenv('ALPHA_VANTAGE_API_KEY') and kind!='Indices':
             data=await av('GLOBAL_QUOTE',symbol); v=data['Global Quote']
             q.update(price=number(v['05. price']),change_pct=number(v['10. change percent'].strip('%')),as_of=v['07. latest trading day'],source='Alpha Vantage',source_url='https://www.alphavantage.co/documentation/#latestprice',freshness='Latest trading day / delayed; account entitlement applies',change_period='previous trading close')
         else:
-            meta,points,url=await equity_series(symbol)
+            meta,points,url=await equity_series(symbol,index=kind=='Indices')
             price=number(meta['regularMarketPrice'])
             date=datetime.fromtimestamp(meta['regularMarketTime'],timezone.utc).isoformat()
             localdate=datetime.fromtimestamp(meta['regularMarketTime'],ZoneInfo(meta.get('exchangeTimezoneName','America/New_York'))).date().isoformat()
@@ -167,21 +171,22 @@ async def history_provider(a,days=100):
         source='Coinbase Exchange • completed UTC daily closes'
     elif kind=='FX':
         url='https://api.frankfurter.dev/v1/'+since+'..'
-        data=(await get(url,{'base':symbol[:3],'symbols':'USD'})).json()
-        points=[{'date':date,'value':number(rate['USD'])} for date,rate in sorted(data['rates'].items())]
+        base,target=symbol.split('/')
+        data=(await get(url,{'base':base,'symbols':target})).json()
+        points=[{'date':date,'value':number(rate[target])} for date,rate in sorted(data['rates'].items())]
         source='Frankfurter / ECB • daily reference rates'
     elif kind=='Macro':
         series=await macro_series(symbol)
         points=[p for p in series['points'] if p['date']>=since]
         source=series['source']+' • '+series['definition'];url=series['source_url']
     else:
-        if os.getenv('ALPHA_VANTAGE_API_KEY'):
+        if os.getenv('ALPHA_VANTAGE_API_KEY') and kind!='Indices':
             data=await av('TIME_SERIES_DAILY',symbol)
             points=[{'date':date,'value':number(v['4. close'])} for date,v in sorted(data['Time Series (Daily)'].items()) if date>=since]
             source='Alpha Vantage • daily closes, unadjusted'
             url='https://www.alphavantage.co/documentation/#daily'
         else:
-            meta,points,url=await equity_series(symbol)
+            meta,points,url=await equity_series(symbol,index=kind=='Indices')
             today=datetime.now(ZoneInfo(meta.get('exchangeTimezoneName','America/New_York'))).date().isoformat()
             points=[p for p in points if since<=p['date']<today]
             source='Yahoo Finance • daily closes; delayed, best-effort website data; current session excluded'
@@ -232,8 +237,30 @@ async def feed_provider(publisher,url,domain):
     return {'items':parse_feed(response.content,publisher,domain),'mode':'provider','source':publisher,'as_of':now(),'retrieved_at':now()}
 
 class Cache:
-    def __init__(self, connection): self.connection=connection; self.locks={}
-    async def fetch(self,key,loader,ttl,empty):
+    def __init__(self, connection): self.connection=connection; self.locks={}; self.tasks={}
+    async def fetch(self,key,loader,ttl,empty,background=False):
+        # Read before acquiring the refresh lock: concurrent readers must not
+        # wait behind an already-running provider request.
+        row=None
+        if background:
+            with self.connection() as c:row=c.execute('SELECT * FROM cache WHERE key=?',(key,)).fetchone()
+            if row and row['expires']>time.time():return json.loads(row['payload'])
+        if background and row and json.loads(row['payload']).get('mode') not in ('unavailable',None):
+            # Keep one refresh per key alive after this request returns. Never
+            # mark the old observation fresh or replace its original timestamp.
+            if key not in self.tasks:
+                task=asyncio.create_task(self.fetch(key,loader,ttl,empty,background=False))
+                self.tasks[key]=task
+                def finished(done):
+                    if self.tasks.get(key) is done:self.tasks.pop(key,None)
+                    if not done.cancelled():
+                        error=done.exception()
+                        if error:
+                            import logging
+                            logging.getLogger(__name__).warning('Background provider refresh failed: %s',type(error).__name__)
+                task.add_done_callback(finished)
+            result=json.loads(row['payload'])
+            return {**result,'mode':'stale','refreshing':True,'warning':'Refreshing expired cache in background; showing the previously retrieved observation'}
         # Single flight avoids duplicate upstream requests within this process.
         lock=self.locks.setdefault(key,asyncio.Lock())
         async with lock:
