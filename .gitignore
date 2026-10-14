@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.sqlite3
+.env
+.pytest_cache/
+
+references/
+*.sqlite3-*
+qa/
