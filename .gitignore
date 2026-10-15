@@ -9,3 +9,13 @@ __pycache__/
 references/
 *.sqlite3-*
 qa/
+
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+*.pem
+*.key
